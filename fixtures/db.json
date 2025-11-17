@@ -1,8 +1,16 @@
 {
-  "orders": [],
+  "orders": [
+    {
+      "id": "ord_zsmwb0",
+      "item": "Demo Hoodie",
+      "amount": 4200,
+      "currency": "usd",
+      "status": "paid"
+    }
+  ],
   "users": [],
   "stats": {
-    "purchases": 0,
+    "purchases": 1,
     "refunds": 0
   }
 }

@@ -1,10 +1,10 @@
-// server.js
+// server.js (with Safe/Live toggle, seeded replay on reset)
 const express = require('express');
 const bodyParser = require('body-parser');
 const fs = require('fs');
 require('dotenv').config();
 
-const SAFE_MODE = process.env.SAFE_MODE === '1';
+let safeMode = process.env.SAFE_MODE !== '0'; // default from env; toggle at runtime
 const app = express();
 
 app.use(bodyParser.json());
@@ -23,21 +23,21 @@ function writeDB(data) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-// HOME (GET) — renders UI and optional notice
-app.get('/', (req, res) => {
+function renderHome({ notice }) {
   const db = readDB();
-  const replayed = req.query.replayed; // 'payment_intent.succeeded' | 'charge.refunded' | 'none' | undefined
-  const modeBadge = SAFE_MODE
+  const modeBadge = safeMode
     ? '<span class="badge safe">SAFE MODE ON</span>'
     : '<span class="badge live">LIVE MODE</span>';
 
-  const notice = replayed
-    ? (replayed === 'none'
-        ? '<div class="notice warn">Nothing to replay.</div>'
-        : `<div class="notice ok">Replayed <code>${replayed}</code>.</div>`)
+  const noticeBlock = notice
+    ? (notice.kind === 'warn'
+        ? `<div class="notice warn">${notice.text}</div>`
+        : `<div class="notice ok">${notice.text}</div>`)
     : '';
 
-  res.send(`
+  const toggleLabel = safeMode ? 'Switch to LIVE Mode' : 'Switch to SAFE Mode';
+
+  return `
   <!doctype html>
   <html>
   <head>
@@ -51,7 +51,14 @@ app.get('/', (req, res) => {
       <h1>Show-Ready Checkout</h1>
       <p class="subtitle">Clean repo · Seed/Reset · Webhook replay ${modeBadge}</p>
 
-      ${notice}
+      <div class="modebar">
+        <form method="POST" action="/admin/toggle-mode">
+          <button type="submit">${toggleLabel}</button>
+        </form>
+        <small class="muted">Mode toggles are in-memory; restart resets to .env</small>
+      </div>
+
+      ${noticeBlock}
 
       <div class="section">
         <form method="POST" action="/checkout" onsubmit="this.btn.disabled=true">
@@ -74,7 +81,7 @@ app.get('/', (req, res) => {
             <button name="z" type="submit">Simulate Refund</button>
           </form>
         </div>
-        <small class="muted">Reset clears state; Replay re-sends the last webhook; Refund shows an alternate path.</small>
+        <small class="muted">Reset clears state (but seeds a replayable event); Replay re-sends last event; Refund shows an alternate path.</small>
       </div>
 
       <div class="section">
@@ -84,10 +91,23 @@ app.get('/', (req, res) => {
     </div>
   </body>
   </html>
-  `);
+  `;
+}
+
+// HOME
+app.get('/', (req, res) => {
+  const replayed = req.query.replayed;
+  let notice;
+  if (replayed) {
+    notice =
+      replayed === 'none'
+        ? { kind: 'warn', text: 'Nothing to replay.' }
+        : { kind: 'ok', text: `Replayed <code>${replayed}</code>.` };
+  }
+  res.send(renderHome({ notice }));
 });
 
-// CHECKOUT (POST) — create order and simulate a successful payment + webhook
+// CHECKOUT — create order and simulate success (deterministic in Safe Mode)
 app.post('/checkout', (_req, res) => {
   const db = readDB();
   const order = {
@@ -100,32 +120,39 @@ app.post('/checkout', (_req, res) => {
   db.orders.push(order);
   writeDB(db);
 
+  // In LIVE mode we could introduce flakiness; keep it simple here.
   const event = {
     type: 'payment_intent.succeeded',
     data: { orderId: order.id, amount: order.amount, currency: order.currency, created: Date.now() }
   };
   fs.writeFileSync(LAST_EVENT, JSON.stringify(event, null, 2));
-
   simulateWebhook(event);
+
   return res.redirect('/');
 });
 
-// WEBHOOK (POST) — parity endpoint (SAFE_MODE simulates locally)
+// WEBHOOK — parity endpoint
 app.post('/webhook', (req, res) => {
   simulateWebhook(req.body);
   res.json({ ok: true });
 });
 
-// ADMIN: RESET (POST) — one-click reset
+// ADMIN: RESET — one-click reset + seed replayable success event
 app.post('/admin/reset', (_req, res) => {
   const fresh = { orders: [], users: [], stats: { purchases: 0, refunds: 0 } };
   writeDB(fresh);
-  if (fs.existsSync(LAST_EVENT)) fs.unlinkSync(LAST_EVENT);
-  console.log('🔄 DB reset.');
-  res.redirect('/');
+
+  const seedEvent = {
+    type: 'payment_intent.succeeded',
+    data: { orderId: 'ord_seed', amount: 4200, currency: 'usd', created: Date.now() }
+  };
+  fs.writeFileSync(LAST_EVENT, JSON.stringify(seedEvent, null, 2));
+
+  console.log('🔄 DB reset. Seeded a sample event for Golden Replay.');
+  res.redirect('/?replayed=none');
 });
 
-// ADMIN: REPLAY (POST) — replay last simulated webhook
+// ADMIN: REPLAY — replay last event
 app.post('/admin/replay', (_req, res) => {
   let t = 'none';
   if (fs.existsSync(LAST_EVENT)) {
@@ -139,7 +166,7 @@ app.post('/admin/replay', (_req, res) => {
   res.redirect('/?replayed=' + encodeURIComponent(t));
 });
 
-// ADMIN: REFUND (POST) — simulate a refund event for last paid order
+// ADMIN: REFUND — alternate path
 app.post('/admin/refund', (_req, res) => {
   const db = readDB();
   const lastPaid = [...db.orders].reverse().find(o => o.status === 'paid');
@@ -160,7 +187,14 @@ app.post('/admin/refund', (_req, res) => {
   res.redirect('/?replayed=' + encodeURIComponent(t));
 });
 
-// Core event handler used by both Checkout and Admin actions
+// ADMIN: TOGGLE MODE — flip Safe/Live without restart
+app.post('/admin/toggle-mode', (_req, res) => {
+  safeMode = !safeMode;
+  console.log(`🛡️  Mode toggled → ${safeMode ? 'SAFE' : 'LIVE'}`);
+  res.redirect('/');
+});
+
+// Core event handler for both success/refund
 function simulateWebhook(event) {
   const db = readDB();
   if (event.type === 'payment_intent.succeeded') {
@@ -169,7 +203,7 @@ function simulateWebhook(event) {
       order.status = 'paid';
       db.stats.purchases += 1;
       writeDB(db);
-      console.log('✅ Payment captured for', order.id);
+      console.log('✅ Payment captured for', order.id, `(mode=${safeMode ? 'SAFE' : 'LIVE'})`);
     }
   }
   if (event.type === 'charge.refunded') {
@@ -178,10 +212,12 @@ function simulateWebhook(event) {
       order.status = 'refunded';
       db.stats.refunds += 1;
       writeDB(db);
-      console.log('↩️  Refunded', order.id);
+      console.log('↩️  Refunded', order.id, `(mode=${safeMode ? 'SAFE' : 'LIVE'})`);
     }
   }
 }
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Show-Ready Checkout running on http://localhost:${PORT}  (SAFE_MODE=${SAFE_MODE})`));
+app.listen(PORT, () =>
+  console.log(`Show-Ready Checkout running on http://localhost:${PORT}  (mode=${safeMode ? 'SAFE' : 'LIVE'})`)
+);

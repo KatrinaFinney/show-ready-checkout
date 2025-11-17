@@ -1,0 +1,9 @@
+{
+  "type": "payment_intent.succeeded",
+  "data": {
+    "orderId": "ord_zsmwb0",
+    "amount": 4200,
+    "currency": "usd",
+    "created": 1763343345417
+  }
+}
