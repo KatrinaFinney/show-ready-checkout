@@ -7,7 +7,8 @@
     "dev": "nodemon server.js",
     "seed": "node seed.js",
     "reset": "bash scripts/reset.sh",
-    "replay": "bash scripts/replay.sh"
+    "replay": "bash scripts/replay.sh",
+    "test": "NODE_ENV=test vitest run"
   },
   "keywords": [],
   "author": "",
@@ -19,6 +20,8 @@
     "express": "^5.1.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.11"
+    "nodemon": "^3.1.11",
+    "supertest": "^7.2.2",
+    "vitest": "^4.0.18"
   }
 }

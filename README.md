@@ -1,3 +1,15 @@
+## Webhook hardening (signature + idempotency)
+
+The `/webhook` endpoint now behaves like a production integration:
+- Requires HMAC signature in `X-ShowReady-Signature`
+- Requires `event_id`
+- Ignores duplicate `event_id` safely (`status: duplicate_ignored`)
+
+### Configure
+```bash
+cp .env.example .env
+# Set WEBHOOK_SHARED_SECRET in .env
+
 # Show-Ready Checkout (Stripe-style Demo)
 
 A tiny, **stage-safe** checkout demo designed for live keynotes & tours.  
