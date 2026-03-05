@@ -1,5 +1,3 @@
-
-````markdown
 # Show-Ready Checkout (Stripe-Style Demo)
 
 A tiny, stage-safe checkout demo designed for live keynotes and integration demos. It highlights one-click reset, golden replay, safe/live toggle, and now production-style webhook guardrails.
