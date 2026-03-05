@@ -1,51 +1,78 @@
 // server.js — Show-Ready Checkout
 // (Safe/Live toggle, seeded Replay on Reset, AJAX JSON to prevent page jumps)
 
-const express = require('express');
-const bodyParser = require('body-parser');
-const fs = require('fs');
-require('dotenv').config();
+const express = require("express");
+const bodyParser = require("body-parser");
+const fs = require("fs");
+// Silence dotenv banner during tests/CI
+require("dotenv").config({ quiet: process.env.NODE_ENV === "test" });
+
+const { verifySignature } = require("./lib/webhookSignature");
+const { createInMemoryIdempotencyStore } = require("./lib/idempotencyStore");
 
 const app = express();
-let safeMode = process.env.SAFE_MODE !== '0'; // default from env; toggle at runtime
+let safeMode = process.env.SAFE_MODE !== "0"; // default from env; toggle at runtime
 
-app.use(bodyParser.json());
-app.use(express.static('public'));
+// Idempotency store (in-memory). In production, swap for Redis.
+const idempotency = createInMemoryIdempotencyStore();
 
-const DB_FILE = './fixtures/db.json';
-const LAST_EVENT = './fixtures/last_event.json';
+// Capture RAW request bytes so signature verification is real.
+app.use(
+  bodyParser.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
+
+app.use(express.static("public"));
+
+const DB_FILE = "./fixtures/db.json";
+const LAST_EVENT = "./fixtures/last_event.json";
 
 /* ---------- Helpers ---------- */
 function readDB() {
   if (!fs.existsSync(DB_FILE)) {
     return { orders: [], users: [], stats: { purchases: 0, refunds: 0 } };
   }
-  return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+  return JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
 }
 function writeDB(data) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
+function newEventId() {
+  return "evt_" + Math.random().toString(36).slice(2, 10);
+}
+
 function simulateWebhook(event) {
   const db = readDB();
 
-  if (event.type === 'payment_intent.succeeded') {
-    const order = db.orders.find(o => o.id === event.data.orderId);
+  if (event.type === "payment_intent.succeeded") {
+    const order = db.orders.find((o) => o.id === event.data.orderId);
     if (order) {
-      order.status = 'paid';
+      order.status = "paid";
       db.stats.purchases += 1;
       writeDB(db);
-      console.log('✅ Payment captured for', order.id, `(mode=${safeMode ? 'SAFE' : 'LIVE'})`);
+      console.log(
+        "✅ Payment captured for",
+        order.id,
+        `(mode=${safeMode ? "SAFE" : "LIVE"})`
+      );
     }
   }
 
-  if (event.type === 'charge.refunded') {
-    const order = db.orders.find(o => o.id === event.data.orderId);
+  if (event.type === "charge.refunded") {
+    const order = db.orders.find((o) => o.id === event.data.orderId);
     if (order) {
-      order.status = 'refunded';
+      order.status = "refunded";
       db.stats.refunds += 1;
       writeDB(db);
-      console.log('↩️  Refunded', order.id, `(mode=${safeMode ? 'SAFE' : 'LIVE'})`);
+      console.log(
+        "↩️  Refunded",
+        order.id,
+        `(mode=${safeMode ? "SAFE" : "LIVE"})`
+      );
     }
   }
 }
@@ -58,12 +85,12 @@ function renderHome({ notice }) {
 
   // Notice is client-rendered; keep server placeholder empty if using AJAX
   const noticeBlock = notice
-    ? (notice.kind === 'warn'
-        ? `<div class="notice warn">${notice.text}</div>`
-        : `<div class="notice ok">${notice.text}</div>`)
-    : '';
+    ? notice.kind === "warn"
+      ? `<div class="notice warn">${notice.text}</div>`
+      : `<div class="notice ok">${notice.text}</div>`
+    : "";
 
-  const toggleLabel = safeMode ? 'Switch to LIVE Mode' : 'Switch to SAFE Mode';
+  const toggleLabel = safeMode ? "Switch to LIVE Mode" : "Switch to SAFE Mode";
 
   return `
   <!doctype html>
@@ -132,173 +159,238 @@ function renderHome({ notice }) {
 /* ---------- Routes ---------- */
 
 // HOME (SSR fallback / first load)
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
   const replayed = req.query.replayed;
   let notice;
   if (replayed) {
     notice =
-      replayed === 'none'
-        ? { kind: 'warn', text: 'Nothing to replay.' }
-        : { kind: 'ok', text: `Replayed <code>${replayed}</code>.` };
+      replayed === "none"
+        ? { kind: "warn", text: "Nothing to replay." }
+        : { kind: "ok", text: `Replayed <code>${replayed}</code>.` };
   }
   res.send(renderHome({ notice }));
 });
 
 // CHECKOUT — create order and simulate success
-app.post('/checkout', (req, res) => {
+app.post("/checkout", (req, res) => {
   const db = readDB();
   const order = {
-    id: 'ord_' + Math.random().toString(36).slice(2, 8),
-    item: 'Demo Hoodie',
+    id: "ord_" + Math.random().toString(36).slice(2, 8),
+    item: "Demo Hoodie",
     amount: 4200,
-    currency: 'usd',
-    status: 'pending'
+    currency: "usd",
+    status: "pending",
   };
   db.orders.push(order);
   writeDB(db);
 
   const event = {
-    type: 'payment_intent.succeeded',
-    data: { orderId: order.id, amount: order.amount, currency: order.currency, created: Date.now() }
+    event_id: newEventId(),
+    type: "payment_intent.succeeded",
+    data: {
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      created: Date.now(),
+    },
   };
+
   fs.writeFileSync(LAST_EVENT, JSON.stringify(event, null, 2));
   simulateWebhook(event);
 
-  const wantsJSON = (req.headers.accept || '').includes('application/json');
+  const wantsJSON = (req.headers.accept || "").includes("application/json");
   if (wantsJSON) {
     return res.json({
       ok: true,
       db: readDB(),
-      notice: { kind: 'ok', text: 'Payment succeeded (simulated).' },
-      mode: safeMode ? 'SAFE' : 'LIVE'
+      notice: { kind: "ok", text: "Payment succeeded (simulated)." },
+      mode: safeMode ? "SAFE" : "LIVE",
     });
   }
-  return res.redirect('/#state');
+  return res.redirect("/#state");
 });
 
-// WEBHOOK — parity endpoint (not used by UI, but here for completeness)
-app.post('/webhook', (req, res) => {
-  simulateWebhook(req.body);
-  res.json({ ok: true });
+// WEBHOOK — hardened parity endpoint (signature + idempotency)
+app.post("/webhook", (req, res) => {
+  const secret = process.env.WEBHOOK_SHARED_SECRET;
+  const signatureHeader = req.header("X-ShowReady-Signature");
+
+  const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
+
+  const sig = verifySignature({
+    rawBodyBuffer: rawBody,
+    secret,
+    headerValue: signatureHeader,
+  });
+
+  if (!sig.ok) {
+    // Don't leak details (no "reason" returned)
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+
+  const event = req.body || {};
+  const eventId = event.event_id;
+
+  if (!eventId || typeof eventId !== "string") {
+    return res.status(400).json({ ok: false, error: "missing_event_id" });
+  }
+
+  if (idempotency.has(eventId)) {
+    return res.status(200).json({ ok: true, status: "duplicate_ignored" });
+  }
+  idempotency.add(eventId);
+
+  simulateWebhook(event);
+  return res.status(200).json({ ok: true, status: "processed" });
 });
 
 // ADMIN: RESET — reset DB + seed a replayable success event AND matching pending order
-app.post('/admin/reset', (req, res) => {
-    // Fresh DB with counters at zero
-    const fresh = { orders: [], users: [], stats: { purchases: 0, refunds: 0 } };
-  
-    // Seed a pending order that Replay can flip to "paid"
-    const seedOrder = {
-      id: 'ord_seed',
-      item: 'Demo Hoodie',
-      amount: 4200,
-      currency: 'usd',
-      status: 'pending'
-    };
-    fresh.orders.push(seedOrder);
-    writeDB(fresh);
-  
-    // Seed a last_event that points at the seeded order
-    const seedEvent = {
-      type: 'payment_intent.succeeded',
-      data: {
-        orderId: seedOrder.id,
-        amount: seedOrder.amount,
-        currency: seedOrder.currency,
-        created: Date.now()
-      }
-    };
-    fs.writeFileSync(LAST_EVENT, JSON.stringify(seedEvent, null, 2));
-  
-    console.log('🔄 DB reset. Seeded ord_seed (pending) + replayable payment_intent.succeeded.');
-  
-    const wantsJSON = (req.headers.accept || '').includes('application/json');
-    if (wantsJSON) {
-      return res.json({
-        ok: true,
-        db: readDB(),
-        notice: { kind: 'warn', text: 'State reset. Replay will mark ord_seed as paid.' },
-        mode: safeMode ? 'SAFE' : 'LIVE'
-      });
-    }
-    return res.redirect('/?replayed=none#state');
-  });
-  
+app.post("/admin/reset", (req, res) => {
+  // Fresh DB with counters at zero
+  const fresh = { orders: [], users: [], stats: { purchases: 0, refunds: 0 } };
 
-// ADMIN: REPLAY — replay last event
-app.post('/admin/replay', (req, res) => {
-  let t = 'none';
-  if (fs.existsSync(LAST_EVENT)) {
-    const event = JSON.parse(fs.readFileSync(LAST_EVENT, 'utf8'));
-    simulateWebhook(event);
-    t = event.type;
-    console.log('✨ Replayed last webhook event:', event.type);
-  } else {
-    console.log('ℹ️ No last_event.json to replay.');
-  }
+  // Seed a pending order that Replay can flip to "paid"
+  const seedOrder = {
+    id: "ord_seed",
+    item: "Demo Hoodie",
+    amount: 4200,
+    currency: "usd",
+    status: "pending",
+  };
+  fresh.orders.push(seedOrder);
+  writeDB(fresh);
 
-  const wantsJSON = (req.headers.accept || '').includes('application/json');
+  // Seed a last_event that points at the seeded order
+  const seedEvent = {
+    event_id: newEventId(),
+    type: "payment_intent.succeeded",
+    data: {
+      orderId: seedOrder.id,
+      amount: seedOrder.amount,
+      currency: seedOrder.currency,
+      created: Date.now(),
+    },
+  };
+  fs.writeFileSync(LAST_EVENT, JSON.stringify(seedEvent, null, 2));
+
+  // Optional: clear idempotency since "reset" implies fresh session behavior
+  idempotency.clear();
+
+  console.log(
+    "🔄 DB reset. Seeded ord_seed (pending) + replayable payment_intent.succeeded."
+  );
+
+  const wantsJSON = (req.headers.accept || "").includes("application/json");
   if (wantsJSON) {
     return res.json({
       ok: true,
       db: readDB(),
-      notice: { kind: t === 'none' ? 'warn' : 'ok', text: t === 'none' ? 'Nothing to replay.' : `Replayed ${t}.` },
-      mode: safeMode ? 'SAFE' : 'LIVE'
+      notice: {
+        kind: "warn",
+        text: "State reset. Replay will mark ord_seed as paid.",
+      },
+      mode: safeMode ? "SAFE" : "LIVE",
     });
   }
-  return res.redirect('/?replayed=' + encodeURIComponent(t) + '#state');
+  return res.redirect("/?replayed=none#state");
+});
+
+// ADMIN: REPLAY — replay last event (note: this bypasses /webhook signature by design)
+app.post("/admin/replay", (req, res) => {
+  let t = "none";
+  if (fs.existsSync(LAST_EVENT)) {
+    const event = JSON.parse(fs.readFileSync(LAST_EVENT, "utf8"));
+    simulateWebhook(event);
+    t = event.type;
+    console.log("✨ Replayed last webhook event:", event.type);
+  } else {
+    console.log("ℹ️ No last_event.json to replay.");
+  }
+
+  const wantsJSON = (req.headers.accept || "").includes("application/json");
+  if (wantsJSON) {
+    return res.json({
+      ok: true,
+      db: readDB(),
+      notice: {
+        kind: t === "none" ? "warn" : "ok",
+        text: t === "none" ? "Nothing to replay." : `Replayed ${t}.`,
+      },
+      mode: safeMode ? "SAFE" : "LIVE",
+    });
+  }
+  return res.redirect("/?replayed=" + encodeURIComponent(t) + "#state");
 });
 
 // ADMIN: REFUND — simulate refund of last paid order
-app.post('/admin/refund', (req, res) => {
+app.post("/admin/refund", (req, res) => {
   const db = readDB();
-  const lastPaid = [...db.orders].reverse().find(o => o.status === 'paid');
-  let t = 'none';
+  const lastPaid = [...db.orders].reverse().find((o) => o.status === "paid");
+  let t = "none";
 
   if (lastPaid) {
     const event = {
-      type: 'charge.refunded',
-      data: { orderId: lastPaid.id, amount: lastPaid.amount, currency: lastPaid.currency, created: Date.now() }
+      event_id: newEventId(),
+      type: "charge.refunded",
+      data: {
+        orderId: lastPaid.id,
+        amount: lastPaid.amount,
+        currency: lastPaid.currency,
+        created: Date.now(),
+      },
     };
     fs.writeFileSync(LAST_EVENT, JSON.stringify(event, null, 2));
     simulateWebhook(event);
     t = event.type;
-    console.log('↩️  Simulated refund for', lastPaid.id);
+    console.log("↩️  Simulated refund for", lastPaid.id);
   } else {
-    console.log('ℹ️ No paid order to refund.');
+    console.log("ℹ️ No paid order to refund.");
   }
 
-  const wantsJSON = (req.headers.accept || '').includes('application/json');
+  const wantsJSON = (req.headers.accept || "").includes("application/json");
   if (wantsJSON) {
     return res.json({
       ok: true,
       db: readDB(),
-      notice: { kind: t === 'none' ? 'warn' : 'ok', text: t === 'none' ? 'No paid order to refund.' : 'Refunded last paid order.' },
-      mode: safeMode ? 'SAFE' : 'LIVE'
+      notice: {
+        kind: t === "none" ? "warn" : "ok",
+        text: t === "none" ? "No paid order to refund." : "Refunded last paid order.",
+      },
+      mode: safeMode ? "SAFE" : "LIVE",
     });
   }
-  return res.redirect('/?replayed=' + encodeURIComponent(t) + '#state');
+  return res.redirect("/?replayed=" + encodeURIComponent(t) + "#state");
 });
 
 // ADMIN: TOGGLE MODE — flip Safe/Live without restart
-app.post('/admin/toggle-mode', (req, res) => {
+app.post("/admin/toggle-mode", (req, res) => {
   safeMode = !safeMode;
-  console.log(`🛡️  Mode toggled → ${safeMode ? 'SAFE' : 'LIVE'}`);
+  console.log(`🛡️  Mode toggled → ${safeMode ? "SAFE" : "LIVE"}`);
 
-  const wantsJSON = (req.headers.accept || '').includes('application/json');
+  const wantsJSON = (req.headers.accept || "").includes("application/json");
   if (wantsJSON) {
     return res.json({
       ok: true,
       db: readDB(),
-      notice: { kind: 'ok', text: `Mode: ${safeMode ? 'SAFE' : 'LIVE'}` },
-      mode: safeMode ? 'SAFE' : 'LIVE'
+      notice: { kind: "ok", text: `Mode: ${safeMode ? "SAFE" : "LIVE"}` },
+      mode: safeMode ? "SAFE" : "LIVE",
     });
   }
-  return res.redirect('/#state');
+  return res.redirect("/#state");
 });
 
 /* ---------- Server ---------- */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`Show-Ready Checkout running on http://localhost:${PORT}  (mode=${safeMode ? 'SAFE' : 'LIVE'})`)
-);
+
+if (require.main === module) {
+  app.listen(PORT, () =>
+    console.log(
+      `Show-Ready Checkout running on http://localhost:${PORT}  (mode=${
+        safeMode ? "SAFE" : "LIVE"
+      })`
+    )
+  );
+}
+
+// Export for tests
+module.exports = { app };
