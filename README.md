@@ -67,7 +67,7 @@ Demos break when state isn’t predictable or when webhooks replay. This project
    `http://localhost:3000`
 
 ---
-
+````
 ## Webhook Hardening (Signature + Idempotency)
 
 The `/webhook` endpoint now behaves like a production integration:
