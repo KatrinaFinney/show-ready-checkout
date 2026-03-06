@@ -1,5 +1,6 @@
 # Show-Ready Checkout (Stripe-Style Demo)
 
+<<<<<<< HEAD
 A tiny, **stage-safe checkout demo** designed for live keynotes & tours.  
 It highlights **one-click Reset**, **Golden Replay**, a **Safe/Live** toggle, and production-style webhook guardrails so the story keeps moving—even if Wi-Fi or timing gets spicy.
 
@@ -26,25 +27,45 @@ cp .env.example .env
 
 - 🎥 Loom walkthrough (**2–5 min**): https://www.loom.com/share/2bbf6c4d24db47f79bed83fa9c9869f2  
 - 💻 Repo: https://github.com/KatrinaFinney/show-ready-checkout
+=======
+A tiny, **stage-safe checkout demo** designed for live keynotes and integration walkthroughs.
 
-This PR ensures webhook behavior is predictable and safe.
+It demonstrates how to build a **reliable demo environment** with deterministic state, replayable webhook events, and production-style webhook guardrails.
 
-## Test Coverage
+Key capabilities include:
 
+- One-click **Reset** for deterministic demos
+- **Golden Replay** to resend the last webhook event
+- **Safe/Live toggle** for runtime safety
+- **Webhook signature verification**
+- **Idempotent event handling**
+- **CI tests to prevent regressions**
+
+The goal is simple: **make demos impossible to break.**
+>>>>>>> e01974c (Update README.md)
+
+---
+
+# Demo
+
+<<<<<<< HEAD
 - **Predictable timing** — Deterministic state makes rehearsals match showtime.
 - **Instant recovery** — Golden Replay re-sends the last good event if something hiccups.
 - **Safety rail** — Safe Mode prevents risky/real calls while demoing integrations.
 - **No page jump** — AJAX updates keep the camera and audience focused on the State panel.
 - **Webhook authenticity** — Signature verification ensures events come from trusted sources.
 - **Replay safety** — Idempotency prevents duplicate events from applying state twice.
+=======
+🎥 Loom walkthrough  
+https://www.loom.com/share/2bbf6c4d24db47f79bed83fa9c9869f2
+>>>>>>> e01974c (Update README.md)
 
-- Missing signature → rejected
-- Invalid signature → rejected
-- Valid signature → processed
-- Duplicate event → ignored
+💻 Repo  
+https://github.com/KatrinaFinney/show-ready-checkout
 
-## Demo
+---
 
+<<<<<<< HEAD
 - **Checkout** → creates an order and simulates a successful payment (`payment_intent.succeeded`).
 - **One-Click Reset** → clears DB **and seeds** `ord_seed (pending)` plus a replayable success event.
 - **Golden Replay** → replays the last event; after Reset this will mark `ord_seed` as **paid**.
@@ -224,3 +245,32 @@ GitHub: https://github.com/KatrinaFinney
 ## License
 
 ISC
+=======
+# Why this exists
+
+Live demos often fail because:
+
+- APIs retry events
+- webhook events replay
+- network timing changes
+- demo state drifts from rehearsals
+
+This project adds **demo guardrails** that mirror real production patterns.
+
+| Feature | Purpose |
+|------|------|
+| Reset | deterministic demo start |
+| Replay | recover from missed webhook events |
+| Safe Mode | prevent risky real calls |
+| Signature verification | ensure webhook authenticity |
+| Idempotency | prevent duplicate event processing |
+| CI tests | keep demo behavior stable |
+
+---
+
+# Features
+
+### Checkout simulation
+
+Creates an order and simulates:
+>>>>>>> e01974c (Update README.md)
