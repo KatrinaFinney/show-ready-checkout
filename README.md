@@ -27,9 +27,9 @@ cp .env.example .env
 - 🎥 Loom walkthrough (**2–5 min**): https://www.loom.com/share/2bbf6c4d24db47f79bed83fa9c9869f2  
 - 💻 Repo: https://github.com/KatrinaFinney/show-ready-checkout
 
----
+This PR ensures webhook behavior is predictable and safe.
 
-## Why this is useful
+## Test Coverage
 
 - **Predictable timing** — Deterministic state makes rehearsals match showtime.
 - **Instant recovery** — Golden Replay re-sends the last good event if something hiccups.
@@ -38,9 +38,12 @@ cp .env.example .env
 - **Webhook authenticity** — Signature verification ensures events come from trusted sources.
 - **Replay safety** — Idempotency prevents duplicate events from applying state twice.
 
----
+- Missing signature → rejected
+- Invalid signature → rejected
+- Valid signature → processed
+- Duplicate event → ignored
 
-## Features
+## Demo
 
 - **Checkout** → creates an order and simulates a successful payment (`payment_intent.succeeded`).
 - **One-Click Reset** → clears DB **and seeds** `ord_seed (pending)` plus a replayable success event.
